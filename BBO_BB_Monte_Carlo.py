@@ -10,7 +10,7 @@ allocation_per_trade = 0.2  # 50% of available capital per trade
 max_concurrent_trades = 5  # Max number of concurrent trades
 
 # Global variables. Monte Carlo
-n_iterations = 88  # Number of Monte Carlo iterations
+n_iterations = 100  # Number of Monte Carlo iterations
 skip_trade_probability = 0.2  # Probability of skipping a trade
 
 
