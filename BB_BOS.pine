@@ -1,0 +1,145 @@
+//@version=6
+strategy('Bollinger Bands Breakout Strategy', shorttitle = 'BB BOS', overlay = true, process_orders_on_close = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 50000)
+
+// Go Long when a candle closes above the Upper Bollinger Band
+// Close positions that close below the Lower Bollinger Band
+// Long Only.
+
+// Per Nick Radge's Unholy Grails
+
+// Bollinger Bands logic
+length = input.int(100, minval = 1, title = 'Length')
+maType = input.string('SMA', 'Basis MA Type', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'])
+src = input(close, title = 'Source')
+
+upperMult = input.float(3.0, minval = 0.001, maxval = 50, title = 'Upper Band StdDev Multiplier')
+lowerMult = input.float(1.0, minval = 0.001, maxval = 50, title = 'Lower Band StdDev Multiplier')
+
+ma(source, length, _type) =>
+    switch _type
+        'SMA' => ta.sma(source, length)
+        'EMA' => ta.ema(source, length)
+        'SMMA (RMA)' => ta.rma(source, length)
+        'WMA' => ta.wma(source, length)
+        'VWMA' => ta.vwma(source, length)
+
+basis = ma(src, length, maType)
+stdDev = ta.stdev(src, length)
+
+upper = basis + upperMult * stdDev
+lower = basis - lowerMult * stdDev
+
+offset = input.int(0, 'Offset', minval = -500, maxval = 500, display = display.data_window)
+
+plot(basis, 'Basis', color = #2962FF, offset = offset)
+p1 = plot(upper, 'Upper', color = #F23645, offset = offset)
+p2 = plot(lower, 'Lower', color = #089981, offset = offset)
+fill(p1, p2, title = 'Background', color = color.rgb(33, 150, 243, 95))
+
+//
+// Strategy Logic
+//
+
+
+// === INPUT DATE RANGE === by allanster
+fromDay = input.int(defval = 1, title = 'From Day', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1, maxval = 31)
+throughDay = input.int(defval = 1, title = 'Through Day', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1, maxval = 31)
+fromMonth = input.int(defval = 2, title = 'From Month', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1, maxval = 12)
+throughMonth = input.int(defval = 1, title = 'Through Month', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1, maxval = 12)
+fromYear = input.int(defval = 2022, title = 'From Year', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1970)
+throughYear = input.int(defval = 2112, title = 'Through Year', inline = 'Date Settings', group = 'Date/Time Settings', minval = 1970)
+
+// Time Range. Note it's probably disabled by default. 
+fromHour = input.int(defval = 15, title = 'Start Hour', inline = 'Start', group = 'Date/Time Settings', minval = 0, maxval = 23)
+fromMinute = input.int(defval = 45, title = 'Start Minute', inline = 'Start', group = 'Date/Time Settings', minval = 0, maxval = 59)
+toHour = input.int(defval = 18, title = 'End Hour', inline = 'End', group = 'Date/Time Settings', minval = 0, maxval = 23)
+toMinute = input.int(defval = 30, title = 'End Minute', inline = 'End', group = 'Date/Time Settings', minval = 0, maxval = 59)
+
+//// === DATE & TIME RANGE FUNCTIONS ===
+isDate() => // create function "within window of dates"
+    start = timestamp(fromYear, fromMonth, fromDay, 00, 00) // date start
+    finish = timestamp(throughYear, throughMonth, throughDay, 23, 59) // date finish
+    isDate = time >= start and time <= finish // current date is "within window of dates"
+    isDate
+
+isTime() =>
+    // Get the current hour and minute
+    currentHour = hour(time)
+    currentMinute = minute(time)
+
+    // Convert the time range to a single value (e.g., 09:30 -> 930)
+    startTime = fromHour * 100 + fromMinute
+    endTime = toHour * 100 + toMinute
+    currentTime = currentHour * 100 + currentMinute
+
+    // Check if the current time is within the specified range
+    isTime = currentTime >= startTime and currentTime <= endTime
+    isTime
+
+//Adding them together, as well as a disabling tool
+disableDay = input.bool(title = 'Disable Day Settings', group = 'Date/Time Settings', defval = true)
+disableTime = input.bool(title = 'Disable Time Settings', group = 'Date/Time Settings', defval = true)
+dateAndTimeRequirements = (isDate() or disableDay) and (isTime() or disableTime)
+
+// Entry and exit conditions
+entry_long = close > upper
+stopout_long = close < lower
+
+// Variables for trade tracking
+var float entry_price = na
+var float initial_stop = na
+var float initial_risk = na
+var float r_multiple = na
+var float cumulative_r_multiple = 0.0 // Cumulative R-multiple for all trades
+var int num_trades = 0
+var float avg_r_multiple = na // Average R-multiple
+
+var bool in_position = false // New flag to track if a position is active
+
+// Long Entry
+if entry_long and not in_position and dateAndTimeRequirements
+    strategy.entry('Long', strategy.long)
+    entry_price := close // Set entry price at close of the bar
+    initial_stop := lower // Set initial stop to the lower band
+    initial_risk := entry_price - initial_stop // Calculate initial risk (R)
+    in_position := true // Mark that we're in a trade now
+    in_position
+
+// Long Exit (Trailing Stop) and R-Multiple Calculation
+if stopout_long and in_position
+    // Close position and reset tracking variables
+    strategy.close('Long')
+
+    if not na(entry_price) and not na(initial_risk) and initial_risk > 0
+        // Calculate trade result in points and R-multiple
+        trade_result = close - entry_price // Profit or loss in points
+        r_multiple := trade_result / initial_risk // Profit/Loss as a multiple of R
+        cumulative_r_multiple := cumulative_r_multiple + r_multiple // Add this trade's R-multiple to the cumulative total
+        num_trades := num_trades + 1 // Increment trade count
+
+        // Calculate the average R-multiple
+        avg_r_multiple := cumulative_r_multiple / num_trades
+        avg_r_multiple
+
+    // Reset entry variables and in_position after closing trade
+    entry_price := na
+    initial_stop := na
+    initial_risk := na
+    in_position := false // Mark that we're out of a trade now
+    in_position
+
+// Risk Parameters
+plot(entry_price, title = 'Entry Price', color = color.green, linewidth = 2, style = plot.style_steplinebr)
+plot(initial_risk, title = 'Initial Risk', color = color.purple, linewidth = 2, style = plot.style_steplinebr)
+plot(initial_stop, title = 'Initial Stop', color = color.red, linewidth = 2, style = plot.style_steplinebr)
+
+// Performance trackers
+plot(num_trades, title = 'Number of Trades', color = color.yellow, linewidth = 2, style = plot.style_stepline)
+plot(cumulative_r_multiple, title = 'Cumulative R-Multiple', color = color.blue, linewidth = 2, style = plot.style_stepline)
+plot(avg_r_multiple, title = 'Average R-Multiple', color = color.red, linewidth = 2, style = plot.style_stepline)
+
+// // Debugging
+// // Plot values
+// plot(r_multiple, title="R-Multiple (Current Trade)", color=color.blue, linewidth=2, style=plot.style_stepline)
+// plotchar(entry_long, title="Entry Long", char='▲', location=location.belowbar, color=color.green, size=size.small)
+// plotchar(stopout_long, title="Exit Long", char='▼', location=location.abovebar, color=color.red, size=size.small)
